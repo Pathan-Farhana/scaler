@@ -6,17 +6,17 @@ import { useAuthStore } from "@/store/authStore";
 import { conversationsApi } from "@/lib/api";
 import { Conversation } from "@/types";
 import { Avatar } from "@/components/ui/Avatar";
-import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 
 interface Props {
   onNewChat: () => void;
   onNewGroup: () => void;
   onSettings: () => void;
+  onContacts: () => void;
   onSelectConversation: (id: string) => void;
 }
 
-export function ConversationList({ onNewChat, onNewGroup, onSettings, onSelectConversation }: Props) {
+export function ConversationList({ onNewChat, onNewGroup, onSettings, onContacts, onSelectConversation }: Props) {
   const { conversations, setConversations, activeConversationId, setActiveConversation } = useChatStore();
   const { user } = useAuthStore();
   const [search, setSearch] = useState("");
@@ -44,7 +44,6 @@ export function ConversationList({ onNewChat, onNewGroup, onSettings, onSelectCo
   const handleSelect = async (conv: Conversation) => {
     setActiveConversation(conv.id);
     onSelectConversation(conv.id);
-    // Mark as read
     try { await conversationsApi.markRead(conv.id); } catch {}
   };
 
@@ -59,7 +58,7 @@ export function ConversationList({ onNewChat, onNewGroup, onSettings, onSelectCo
         <div className="flex items-center gap-1">
           <IconBtn icon={<Archive size={18} />} title="Archived" onClick={() => {}} />
           <IconBtn icon={<Edit size={18} />} title="New Chat" onClick={onNewChat} />
-          <IconBtn icon={<Users size={18} />} title="New Group" onClick={onNewGroup} />
+          <IconBtn icon={<Users size={18} />} title="Contacts" onClick={onContacts} />
           <IconBtn icon={<Settings size={18} />} title="Settings" onClick={onSettings} />
         </div>
       </div>
@@ -119,14 +118,18 @@ export function ConversationList({ onNewChat, onNewGroup, onSettings, onSelectCo
         )}
       </div>
 
-      {/* Bottom nav hint */}
+      {/* Bottom nav */}
       <div className="border-t border-signal-border px-4 py-2 flex items-center justify-around">
         {[
-          { icon: <Edit size={16} />, label: "Chats" },
-          { icon: <Phone size={16} />, label: "Calls" },
-          { icon: <Star size={16} />, label: "Stories" },
-        ].map(({ icon, label }) => (
-          <button key={label} className="flex flex-col items-center gap-0.5 text-signal-secondary hover:text-signal-teal transition-colors py-1">
+          { icon: <Edit size={16} />, label: "Chats", onClick: onNewChat },
+          { icon: <Phone size={16} />, label: "Calls", onClick: () => {} },
+          { icon: <Star size={16} />, label: "Stories", onClick: () => {} },
+        ].map(({ icon, label, onClick }) => (
+          <button
+            key={label}
+            onClick={onClick}
+            className="flex flex-col items-center gap-0.5 text-signal-secondary hover:text-signal-teal transition-colors py-1"
+          >
             {icon}
             <span className="text-[10px] font-medium">{label}</span>
           </button>
@@ -219,15 +222,10 @@ function formatTime(dateStr: string) {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) {
-      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    } else if (diffDays === 1) {
-      return "Yesterday";
-    } else if (diffDays < 7) {
-      return date.toLocaleDateString([], { weekday: "short" });
-    } else {
-      return date.toLocaleDateString([], { month: "short", day: "numeric" });
-    }
+    if (diffDays === 0) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return date.toLocaleDateString([], { weekday: "short" });
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
   } catch {
     return "";
   }

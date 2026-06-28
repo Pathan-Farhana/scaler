@@ -5,14 +5,13 @@ import { Toaster } from "react-hot-toast";
 import { useAuthStore } from "@/store/authStore";
 import { useChatStore } from "@/store/chatStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { conversationsApi } from "@/lib/api";
-import { Conversation } from "@/types";
 
 import { ConversationList } from "@/components/chat/ConversationList";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { ConversationInfo } from "@/components/chat/ConversationInfo";
 import { NewChatModal } from "@/components/chat/NewChatModal";
 import { NewGroupModal } from "@/components/chat/NewGroupModal";
+import { ContactsModal } from "@/components/chat/ContactsModal";
 import { Settings } from "@/components/layout/Settings";
 import { EmptyState } from "@/components/layout/EmptyState";
 
@@ -24,6 +23,7 @@ export default function ChatPage() {
 
   const [showNewChat, setShowNewChat] = useState(false);
   const [showNewGroup, setShowNewGroup] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [mobileView, setMobileView] = useState<"list" | "chat">("list");
@@ -31,9 +31,7 @@ export default function ChatPage() {
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
   useEffect(() => {
-    if (!token || !user) {
-      router.replace("/auth");
-    }
+    if (!token || !user) router.replace("/auth");
   }, [token, user, router]);
 
   const handleSelectConversation = (id: string) => {
@@ -80,6 +78,7 @@ export default function ChatPage() {
           <ConversationList
             onNewChat={() => setShowNewChat(true)}
             onNewGroup={() => setShowNewGroup(true)}
+            onContacts={() => setShowContacts(true)}
             onSettings={() => setShowSettings(true)}
             onSelectConversation={handleSelectConversation}
           />
@@ -127,6 +126,12 @@ export default function ChatPage() {
       {showNewGroup && (
         <NewGroupModal
           onClose={() => setShowNewGroup(false)}
+          onOpenConversation={handleOpenConversation}
+        />
+      )}
+      {showContacts && (
+        <ContactsModal
+          onClose={() => setShowContacts(false)}
           onOpenConversation={handleOpenConversation}
         />
       )}

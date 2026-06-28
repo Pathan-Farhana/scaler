@@ -1,12 +1,15 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import toast, { Toaster } from "react-hot-toast";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { User } from "@/types";
+import { Loader2, ArrowLeft, RefreshCw } from "lucide-react";
 
 type Step = "phone" | "otp" | "register" | "login";
+
+const OTP_RESEND_SECONDS = 60;
 
 export default function AuthPage() {
   const router = useRouter();
@@ -18,29 +21,82 @@ export default function AuthPage() {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [otpMode, setOtpMode] = useState<"twilio" | "mock" | null>(null);
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
+  const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
+
+  // Resend countdown
+  useEffect(() => {
+    if (resendCountdown > 0) {
+      countdownRef.current = setTimeout(() => setResendCountdown((n) => n - 1), 1000);
+    }
+    return () => { if (countdownRef.current) clearTimeout(countdownRef.current); };
+  }, [resendCountdown]);
+
+  // Sync otpDigits -> otp string
+  useEffect(() => {
+    setOtp(otpDigits.join(""));
+  }, [otpDigits]);
+
+  const handleOtpDigit = (idx: number, val: string) => {
+    const digit = val.replace(/\D/g, "").slice(-1);
+    const next = [...otpDigits];
+    next[idx] = digit;
+    setOtpDigits(next);
+    if (digit && idx < 5) otpInputsRef.current[idx + 1]?.focus();
+  };
+
+  const handleOtpKeyDown = (idx: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !otpDigits[idx] && idx > 0) {
+      otpInputsRef.current[idx - 1]?.focus();
+    }
+  };
 
   const handleSendOtp = async () => {
-    if (!phone.trim()) return toast.error("Enter a phone number");
+    const trimmed = phone.trim();
+    if (!trimmed) return toast.error("Enter a phone number");
+    if (!trimmed.startsWith("+")) return toast.error("Include country code, e.g. +91…");
     setLoading(true);
     try {
-      await authApi.sendOtp(phone);
-      toast.success("OTP sent! (Use: 123456)");
+      const res = await authApi.sendOtp(trimmed);
+      const data = res.data;
+      setOtpMode(data.mode || "mock");
+      setResendCountdown(OTP_RESEND_SECONDS);
+      setOtpDigits(["", "", "", "", "", ""]);
       setStep("otp");
-    } catch {
-      toast.error("Failed to send OTP");
+      if (data.mode === "mock") {
+        toast("Demo mode: OTP is shown in the server console.", { icon: "🛠️", duration: 5000 });
+        if (data.mock_otp) {
+          // Auto-fill for demo convenience
+          const digits = data.mock_otp.split("").slice(0, 6);
+          setOtpDigits([...digits, ...Array(6 - digits.length).fill("")]);
+        }
+      } else {
+        toast.success(`OTP sent to ${trimmed} via SMS`);
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to send OTP";
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
   const handleVerifyOtp = () => {
-    if (otp !== "123456") return toast.error("Invalid OTP. Use 123456");
+    if (otp.length !== 6) return toast.error("Enter the 6-digit code");
     setStep(mode === "register" ? "register" : "login");
+  };
+
+  const handleResendOtp = async () => {
+    if (resendCountdown > 0) return;
+    await handleSendOtp();
   };
 
   const handleRegister = async () => {
     if (!name.trim()) return toast.error("Enter your name");
-    if (password.length < 6) return toast.error("Password must be 6+ characters");
+    if (password.length < 6) return toast.error("Password must be at least 6 characters");
     setLoading(true);
     try {
       const res = await authApi.register({ phone_number: phone, display_name: name, password, otp });
@@ -84,165 +140,205 @@ export default function AuthPage() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-signal-border p-6">
-          {/* Tab switch */}
+
+          {/* ── Step: Phone ── */}
           {step === "phone" && (
-            <div className="flex rounded-lg bg-signal-bg p-1 mb-5">
-              {(["register", "login"] as const).map((m) => (
+            <>
+              {/* Mode tabs */}
+              <div className="flex rounded-lg bg-signal-bg p-1 mb-5">
+                {(["register", "login"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
+                      mode === m ? "bg-white shadow-sm text-signal-teal" : "text-signal-secondary"
+                    }`}
+                  >
+                    {m === "register" ? "Create account" : "Sign in"}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">
+                    Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSendOtp()}
+                    placeholder="+91 98765 43210"
+                    className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+                    autoFocus
+                  />
+                  <p className="text-[11px] text-signal-secondary mt-1.5">
+                    Include your country code (e.g. +1, +91, +44)
+                  </p>
+                </div>
                 <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
-                    mode === m ? "bg-white shadow-sm text-signal-teal" : "text-signal-secondary"
-                  }`}
+                  onClick={handleSendOtp}
+                  disabled={loading}
+                  className="w-full bg-signal-teal text-white py-3 rounded-xl font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  {m === "register" ? "Create account" : "Sign in"}
+                  {loading ? <><Loader2 size={16} className="animate-spin" /> Sending…</> : "Send OTP"}
                 </button>
-              ))}
-            </div>
-          )}
-
-          {/* Step: Phone */}
-          {step === "phone" && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide">
-                  Phone Number
-                </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendOtp()}
-                  placeholder="+1 234 567 8900"
-                  className="mt-1 w-full border border-signal-border rounded-lg px-4 py-3 text-sm focus:border-signal-teal transition-colors"
-                />
               </div>
-              <button
-                onClick={handleSendOtp}
-                disabled={loading}
-                className="w-full bg-signal-teal text-white py-3 rounded-lg font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50"
-              >
-                {loading ? "Sending…" : "Send OTP"}
-              </button>
-              <p className="text-xs text-signal-secondary text-center">
-                Demo: use any number, OTP is <strong>123456</strong>
-              </p>
-            </div>
+            </>
           )}
 
-          {/* Step: OTP */}
+          {/* ── Step: OTP ── */}
           {step === "otp" && (
-            <div className="space-y-4">
-              <div className="text-center mb-2">
-                <p className="text-sm text-signal-secondary">Enter the code sent to</p>
-                <p className="font-semibold text-gray-800">{phone}</p>
+            <div className="space-y-5">
+              <button onClick={() => setStep("phone")} className="flex items-center gap-1 text-signal-secondary text-sm hover:text-gray-700 transition-colors">
+                <ArrowLeft size={14} /> Back
+              </button>
+
+              <div className="text-center">
+                <p className="text-sm text-signal-secondary">
+                  {otpMode === "twilio"
+                    ? "We sent a 6-digit code via SMS to"
+                    : "Demo mode — code auto-filled below"}
+                </p>
+                <p className="font-bold text-gray-800 mt-0.5">{phone}</p>
               </div>
-              <input
-                type="text"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleVerifyOtp()}
-                placeholder="123456"
-                maxLength={6}
-                className="w-full border border-signal-border rounded-lg px-4 py-3 text-center text-2xl tracking-widest font-mono focus:border-signal-teal"
-              />
+
+              {/* 6-box OTP input */}
+              <div className="flex justify-center gap-2">
+                {otpDigits.map((digit, i) => (
+                  <input
+                    key={i}
+                    ref={(el) => { otpInputsRef.current[i] = el; }}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={digit}
+                    onChange={(e) => handleOtpDigit(i, e.target.value)}
+                    onKeyDown={(e) => handleOtpKeyDown(i, e)}
+                    className={`w-11 h-12 text-center text-xl font-bold border-2 rounded-xl transition-colors focus:outline-none ${
+                      digit ? "border-signal-teal bg-signal-teal-light text-signal-teal" : "border-signal-border focus:border-signal-teal"
+                    }`}
+                  />
+                ))}
+              </div>
+
               <button
                 onClick={handleVerifyOtp}
-                className="w-full bg-signal-teal text-white py-3 rounded-lg font-medium text-sm hover:bg-signal-teal-dark transition-colors"
+                disabled={otp.length !== 6}
+                className="w-full bg-signal-teal text-white py-3 rounded-xl font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-40"
               >
-                Verify
+                Verify Code
               </button>
-              <button onClick={() => setStep("phone")} className="w-full text-signal-secondary text-sm">
-                ← Back
-              </button>
+
+              {/* Resend */}
+              <div className="text-center">
+                {resendCountdown > 0 ? (
+                  <p className="text-sm text-signal-secondary">
+                    Resend code in <span className="font-semibold text-signal-teal">{resendCountdown}s</span>
+                  </p>
+                ) : (
+                  <button
+                    onClick={handleResendOtp}
+                    className="flex items-center gap-1.5 text-sm text-signal-teal font-medium hover:underline mx-auto"
+                  >
+                    <RefreshCw size={13} /> Resend OTP
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Step: Register */}
+          {/* ── Step: Register ── */}
           {step === "register" && (
             <div className="space-y-4">
+              <button onClick={() => setStep("otp")} className="flex items-center gap-1 text-signal-secondary text-sm hover:text-gray-700">
+                <ArrowLeft size={14} /> Back
+              </button>
               <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide">
-                  Your Name
-                </label>
+                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">Your Name</label>
                 <input
+                  autoFocus
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Alice Johnson"
-                  className="mt-1 w-full border border-signal-border rounded-lg px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+                  className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide">
-                  Password
-                </label>
+                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">Password</label>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleRegister()}
                   placeholder="Min. 6 characters"
-                  className="mt-1 w-full border border-signal-border rounded-lg px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+                  className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
                 />
               </div>
               <button
                 onClick={handleRegister}
                 disabled={loading}
-                className="w-full bg-signal-teal text-white py-3 rounded-lg font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50"
+                className="w-full bg-signal-teal text-white py-3 rounded-xl font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {loading ? "Creating account…" : "Create Account"}
+                {loading ? <><Loader2 size={16} className="animate-spin" /> Creating…</> : "Create Account"}
               </button>
             </div>
           )}
 
-          {/* Step: Login */}
+          {/* ── Step: Login ── */}
           {step === "login" && (
             <div className="space-y-4">
+              <button onClick={() => setStep("otp")} className="flex items-center gap-1 text-signal-secondary text-sm hover:text-gray-700">
+                <ArrowLeft size={14} /> Back
+              </button>
+              <p className="text-sm text-signal-secondary text-center">Signing in as <strong className="text-gray-800">{phone}</strong></p>
               <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide">
-                  Password
-                </label>
+                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">Password</label>
                 <input
+                  autoFocus
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleLogin()}
                   placeholder="Your password"
-                  className="mt-1 w-full border border-signal-border rounded-lg px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+                  className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
                 />
               </div>
               <button
                 onClick={handleLogin}
                 disabled={loading}
-                className="w-full bg-signal-teal text-white py-3 rounded-lg font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50"
+                className="w-full bg-signal-teal text-white py-3 rounded-xl font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {loading ? "Signing in…" : "Sign In"}
+                {loading ? <><Loader2 size={16} className="animate-spin" /> Signing in…</> : "Sign In"}
               </button>
             </div>
           )}
         </div>
 
-        {/* Seeded accounts hint */}
-        <div className="mt-4 bg-white rounded-xl border border-signal-border p-4">
-          <p className="text-xs font-semibold text-signal-secondary mb-2">Demo Accounts (password: password123)</p>
-          <div className="space-y-1">
-            {[
-              ["+1234567890", "Alice Johnson"],
-              ["+1234567891", "Bob Smith"],
-              ["+1234567892", "Carol White"],
-            ].map(([num, name]) => (
-              <button
-                key={num}
-                onClick={() => { setPhone(num); setMode("login"); }}
-                className="w-full flex justify-between text-xs text-left px-2 py-1.5 rounded hover:bg-signal-bg transition-colors"
-              >
-                <span className="font-medium text-gray-700">{name}</span>
-                <span className="text-signal-secondary font-mono">{num}</span>
-              </button>
-            ))}
+        {/* Demo accounts */}
+        {step === "phone" && (
+          <div className="mt-4 bg-white rounded-xl border border-signal-border p-4">
+            <p className="text-xs font-semibold text-signal-secondary mb-2">Demo Accounts (password: password123)</p>
+            <div className="space-y-1">
+              {[
+                ["+1234567890", "Alice Johnson"],
+                ["+1234567891", "Bob Smith"],
+                ["+1234567892", "Carol White"],
+              ].map(([num, uname]) => (
+                <button
+                  key={num}
+                  onClick={() => { setPhone(num); setMode("login"); }}
+                  className="w-full flex justify-between text-xs text-left px-2 py-1.5 rounded hover:bg-signal-bg transition-colors"
+                >
+                  <span className="font-medium text-gray-700">{uname}</span>
+                  <span className="text-signal-secondary font-mono">{num}</span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
