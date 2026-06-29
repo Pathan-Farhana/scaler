@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Search, Edit, Settings, Users, Phone, Archive, Star } from "lucide-react";
+import { Search, Edit, Settings,User, Users, Phone, Archive, Star } from "lucide-react";
 import { useChatStore } from "@/store/chatStore";
 import { useAuthStore } from "@/store/authStore";
 import { conversationsApi } from "@/lib/api";
@@ -58,7 +58,8 @@ export function ConversationList({ onNewChat, onNewGroup, onSettings, onContacts
         <div className="flex items-center gap-1">
           <IconBtn icon={<Archive size={18} />} title="Archived" onClick={() => {}} />
           <IconBtn icon={<Edit size={18} />} title="New Chat" onClick={onNewChat} />
-          <IconBtn icon={<Users size={18} />} title="Contacts" onClick={onContacts} />
+          <IconBtn icon={<User size={18} />} title="Contacts" onClick={onContacts} />
+          <IconBtn icon={<Users size={18} />} title="New Group" onClick={onNewGroup} />
           <IconBtn icon={<Settings size={18} />} title="Settings" onClick={onSettings} />
         </div>
       </div>
