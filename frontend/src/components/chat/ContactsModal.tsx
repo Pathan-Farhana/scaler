@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import {
-  X, Search, UserPlus, MessageCircle, Trash2,
-  Phone, ChevronRight, Users, Check, Loader2,
+  X, UserPlus, Search, MessageCircle, Phone, Trash2,
+  ChevronRight, CheckCircle2, AlertCircle, Loader2, Users
 } from "lucide-react";
 import { Contact, User } from "@/types";
 import { usersApi, conversationsApi } from "@/lib/api";
@@ -15,83 +15,91 @@ interface Props {
   onOpenConversation: (id: string) => void;
 }
 
-type Tab = "all" | "add";
+type View = "list" | "add";
 
 export function ContactsModal({ onClose, onOpenConversation }: Props) {
-  const [tab, setTab] = useState<Tab>("all");
+  const [view, setView] = useState<View>("list");
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [loadingContacts, setLoadingContacts] = useState(true);
 
-  // Add-contact form state
+  // Add contact state
   const [addPhone, setAddPhone] = useState("");
   const [addNickname, setAddNickname] = useState("");
   const [addLoading, setAddLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState<User[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [addResult, setAddResult] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [previewUser, setPreviewUser] = useState<User | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
 
   const { upsertConversation } = useChatStore();
 
   const loadContacts = useCallback(async () => {
-    setLoading(true);
+    setLoadingContacts(true);
     try {
       const res = await usersApi.getContacts();
       setContacts(res.data);
     } catch {
       toast.error("Failed to load contacts");
     } finally {
-      setLoading(false);
+      setLoadingContacts(false);
     }
   }, []);
 
   useEffect(() => { loadContacts(); }, [loadContacts]);
 
-  // Live-search users while typing in Add tab
-  const handleAddPhoneChange = async (val: string) => {
-    setAddPhone(val);
-    if (val.trim().length < 2) { setSearchResults([]); return; }
-    setSearching(true);
-    try {
-      const res = await usersApi.search(val.trim());
-      setSearchResults(res.data);
-    } catch {}
-    setSearching(false);
+  // Live lookup as user types phone number
+  useEffect(() => {
+    if (addPhone.length < 7) { setPreviewUser(null); return; }
+    const timer = setTimeout(async () => {
+      setLookupLoading(true);
+      try {
+        const res = await usersApi.search(addPhone);
+        const match = (res.data as User[]).find((u) => u.phone_number === addPhone);
+        setPreviewUser(match || null);
+      } catch {
+        setPreviewUser(null);
+      } finally {
+        setLookupLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [addPhone]);
+
+  const resetAdd = () => {
+    setAddPhone(""); setAddNickname(""); setAddResult(null); setPreviewUser(null);
   };
 
-  const handleAddContact = async (phone?: string, nickname?: string) => {
-    const targetPhone = phone ?? addPhone.trim();
-    if (!targetPhone) return toast.error("Enter a phone number");
+  const handleAddContact = async () => {
+    if (!addPhone.trim()) { setAddResult({ type: "error", message: "Enter a phone number" }); return; }
     setAddLoading(true);
+    setAddResult(null);
     try {
-      const res = await usersApi.addContact(targetPhone, nickname ?? addNickname.trim() || undefined);
-      setContacts((prev) => [...prev, res.data]);
-      setAddPhone("");
-      setAddNickname("");
-      setSearchResults([]);
-      setTab("all");
-      toast.success(`${res.data.contact_user.display_name} added to contacts!`);
+      await usersApi.addContact(addPhone.trim(), addNickname.trim() || undefined);
+      setAddResult({ type: "success", message: "Contact added successfully!" });
+      await loadContacts();
+      setTimeout(() => { resetAdd(); setView("list"); }, 1200);
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to add contact";
-      toast.error(msg);
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setAddResult({ type: "error", message: detail || "Failed to add contact" });
     } finally {
       setAddLoading(false);
     }
   };
 
-  const handleRemove = async (contactId: string, name: string) => {
-    if (!confirm(`Remove ${name} from contacts?`)) return;
+  const handleRemoveContact = async (contact: Contact) => {
+    if (!confirm(`Remove ${contact.nickname || contact.contact_user.display_name} from contacts?`)) return;
     try {
-      await usersApi.removeContact(contactId);
-      setContacts((prev) => prev.filter((c) => c.id !== contactId));
+      await usersApi.removeContact(contact.id);
+      setContacts((prev) => prev.filter((c) => c.id !== contact.id));
       toast.success("Contact removed");
     } catch {
       toast.error("Failed to remove contact");
     }
   };
 
-  const handleMessage = async (userId: string) => {
+  const handleMessage = async (contact: Contact) => {
     try {
-      const res = await conversationsApi.createDirect(userId);
+      const res = await conversationsApi.createDirect(contact.contact_user.id);
       upsertConversation(res.data);
       onOpenConversation(res.data.id);
       onClose();
@@ -101,65 +109,65 @@ export function ContactsModal({ onClose, onOpenConversation }: Props) {
   };
 
   const filtered = contacts.filter((c) => {
-    const name = c.nickname || c.contact_user.display_name;
-    const phone = c.contact_user.phone_number;
+    const name = (c.nickname || c.contact_user.display_name).toLowerCase();
+    const phone = c.contact_user.phone_number.toLowerCase();
     const q = search.toLowerCase();
-    return name.toLowerCase().includes(q) || phone.includes(q);
+    return name.includes(q) || phone.includes(q);
   });
 
-  // Alphabetical grouping
+  // Group by first letter
   const grouped = filtered.reduce<Record<string, Contact[]>>((acc, c) => {
-    const name = c.nickname || c.contact_user.display_name;
-    const letter = name[0]?.toUpperCase() || "#";
-    if (!acc[letter]) acc[letter] = [];
-    acc[letter].push(c);
+    const key = (c.nickname || c.contact_user.display_name)[0].toUpperCase();
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(c);
     return acc;
   }, {});
-  const sortedKeys = Object.keys(grouped).sort();
+  const sortedLetters = Object.keys(grouped).sort();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden" style={{ maxHeight: "85vh" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden flex flex-col max-h-[85vh]">
 
-        {/* ── Header ── */}
+        {/* ── HEADER ── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-signal-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Users size={20} className="text-signal-teal" />
-            <h2 className="font-semibold text-gray-800 text-[16px]">Contacts</h2>
-            {contacts.length > 0 && (
+            {view === "add" && (
+              <button
+                onClick={() => { setView("list"); resetAdd(); }}
+                className="p-1 text-signal-icon hover:text-gray-700 -ml-1"
+              >
+                <ChevronRight size={18} className="rotate-180" />
+              </button>
+            )}
+            <h2 className="font-semibold text-gray-800">
+              {view === "list" ? "Contacts" : "Add Contact"}
+            </h2>
+            {view === "list" && contacts.length > 0 && (
               <span className="text-xs bg-signal-bg text-signal-secondary px-2 py-0.5 rounded-full font-medium">
                 {contacts.length}
               </span>
             )}
           </div>
-          <button onClick={onClose} className="p-1.5 text-signal-icon hover:text-gray-700 rounded-lg hover:bg-signal-bg transition-colors">
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* ── Tabs ── */}
-        <div className="flex border-b border-signal-border flex-shrink-0">
-          {([["all", "All Contacts"], ["add", "Add Contact"]] as [Tab, string][]).map(([t, label]) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 py-3 text-sm font-medium transition-colors relative ${
-                tab === t ? "text-signal-teal" : "text-signal-secondary hover:text-gray-700"
-              }`}
-            >
-              {label}
-              {tab === t && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-signal-teal rounded-full" />
-              )}
+          <div className="flex items-center gap-2">
+            {view === "list" && (
+              <button
+                onClick={() => setView("add")}
+                className="flex items-center gap-1.5 text-sm font-medium text-signal-teal hover:bg-signal-teal-light px-3 py-1.5 rounded-lg transition-colors"
+              >
+                <UserPlus size={15} />
+                Add
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 text-signal-icon hover:text-gray-700">
+              <X size={20} />
             </button>
-          ))}
+          </div>
         </div>
 
-        {/* ── All Contacts Tab ── */}
-        {tab === "all" && (
+        {/* ── LIST VIEW ── */}
+        {view === "list" && (
           <>
-            {/* Search bar */}
-            <div className="px-4 py-3 flex-shrink-0">
+            <div className="px-4 py-3 border-b border-signal-border flex-shrink-0">
               <div className="flex items-center gap-2 bg-signal-bg rounded-xl px-3 py-2">
                 <Search size={15} className="text-signal-icon flex-shrink-0" />
                 <input
@@ -168,6 +176,7 @@ export function ContactsModal({ onClose, onOpenConversation }: Props) {
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search contacts"
                   className="flex-1 bg-transparent text-sm text-gray-800 placeholder:text-signal-secondary"
+                  autoFocus
                 />
                 {search && (
                   <button onClick={() => setSearch("")} className="text-signal-icon hover:text-gray-600">
@@ -177,166 +186,188 @@ export function ContactsModal({ onClose, onOpenConversation }: Props) {
               </div>
             </div>
 
-            {/* Contact list */}
-            <div className="flex-1 overflow-y-auto px-2 pb-3">
-              {loading ? (
-                <div className="flex justify-center items-center py-12">
-                  <Loader2 size={24} className="animate-spin text-signal-teal" />
-                </div>
-              ) : contacts.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-3 text-center px-6">
-                  <div className="w-16 h-16 rounded-full bg-signal-bg flex items-center justify-center">
-                    <Users size={28} className="text-signal-icon" />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-700">No contacts yet</p>
-                    <p className="text-sm text-signal-secondary mt-1">
-                      Add people by their phone number to start messaging.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setTab("add")}
-                    className="mt-2 flex items-center gap-2 bg-signal-teal text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-signal-teal-dark transition-colors"
-                  >
-                    <UserPlus size={16} />
-                    Add your first contact
-                  </button>
+            <div className="flex-1 overflow-y-auto">
+              {loadingContacts ? (
+                <div className="flex flex-col gap-2 p-4">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 animate-pulse px-2 py-2">
+                      <div className="w-11 h-11 rounded-full bg-gray-200 flex-shrink-0" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 bg-gray-200 rounded w-2/5" />
+                        <div className="h-2 bg-gray-100 rounded w-1/3" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : filtered.length === 0 ? (
-                <div className="flex flex-col items-center py-8 text-signal-secondary gap-2">
-                  <Search size={24} className="opacity-30" />
-                  <p className="text-sm">No contacts match &ldquo;{search}&rdquo;</p>
+                <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                  <div className="w-16 h-16 rounded-full bg-signal-bg flex items-center justify-center mb-3">
+                    <Users size={28} className="text-signal-icon" />
+                  </div>
+                  {search ? (
+                    <>
+                      <p className="font-semibold text-gray-700 text-sm">No results for &quot;{search}&quot;</p>
+                      <p className="text-signal-secondary text-xs mt-1">Try a different name or number</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-semibold text-gray-700 text-sm">No contacts yet</p>
+                      <p className="text-signal-secondary text-xs mt-1">Add contacts to start messaging</p>
+                      <button
+                        onClick={() => setView("add")}
+                        className="mt-4 flex items-center gap-2 bg-signal-teal text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-signal-teal-dark transition-colors"
+                      >
+                        <UserPlus size={15} />
+                        Add your first contact
+                      </button>
+                    </>
+                  )}
                 </div>
               ) : (
-                sortedKeys.map((letter) => (
-                  <div key={letter}>
-                    {/* Letter divider */}
-                    <div className="px-3 py-1.5 sticky top-0 bg-white/80 backdrop-blur-sm">
-                      <span className="text-[11px] font-bold text-signal-teal uppercase tracking-widest">
-                        {letter}
-                      </span>
+                <div className="pb-3">
+                  {sortedLetters.map((letter) => (
+                    <div key={letter}>
+                      <div className="px-5 py-1.5 bg-signal-bg/60">
+                        <span className="text-[11px] font-bold text-signal-teal uppercase tracking-wider">{letter}</span>
+                      </div>
+                      {grouped[letter].map((contact) => (
+                        <ContactRow
+                          key={contact.id}
+                          contact={contact}
+                          onMessage={() => handleMessage(contact)}
+                          onRemove={() => handleRemoveContact(contact)}
+                        />
+                      ))}
                     </div>
-                    {grouped[letter].map((contact) => (
-                      <ContactRow
-                        key={contact.id}
-                        contact={contact}
-                        onMessage={() => handleMessage(contact.contact_user.id)}
-                        onRemove={() => handleRemove(contact.id, contact.nickname || contact.contact_user.display_name)}
-                      />
-                    ))}
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
-
-            {/* Add button footer */}
-            {contacts.length > 0 && (
-              <div className="px-4 py-3 border-t border-signal-border flex-shrink-0">
-                <button
-                  onClick={() => setTab("add")}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-signal-teal text-signal-teal text-sm font-medium hover:bg-signal-teal-light transition-colors"
-                >
-                  <UserPlus size={16} />
-                  Add New Contact
-                </button>
-              </div>
-            )}
           </>
         )}
 
-        {/* ── Add Contact Tab ── */}
-        {tab === "add" && (
-          <div className="flex-1 overflow-y-auto">
-            <div className="px-5 py-5 space-y-4">
-              {/* Instructions */}
-              <div className="bg-signal-teal-light rounded-xl px-4 py-3">
-                <p className="text-[13px] text-signal-teal font-medium">
-                  Enter a phone number to find and add a user on Signal.
-                </p>
-              </div>
+        {/* ── ADD CONTACT VIEW ── */}
+        {view === "add" && (
+          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
 
-              {/* Phone input */}
-              <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">
-                  Phone Number *
-                </label>
-                <div className="flex items-center gap-2 border border-signal-border rounded-xl px-3 py-3 focus-within:border-signal-teal transition-colors">
-                  <Phone size={16} className="text-signal-icon flex-shrink-0" />
-                  <input
-                    autoFocus
-                    type="tel"
-                    value={addPhone}
-                    onChange={(e) => handleAddPhoneChange(e.target.value)}
-                    placeholder="+1 234 567 8900"
-                    className="flex-1 text-sm text-gray-800 placeholder:text-signal-secondary bg-transparent"
-                  />
-                  {searching && <Loader2 size={14} className="animate-spin text-signal-icon" />}
-                </div>
-              </div>
-
-              {/* Nickname input */}
-              <div>
-                <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">
-                  Nickname (optional)
-                </label>
+            {/* Phone */}
+            <div>
+              <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">
+                Phone Number <span className="text-red-400">*</span>
+              </label>
+              <div className="relative">
                 <input
-                  type="text"
-                  value={addNickname}
-                  onChange={(e) => setAddNickname(e.target.value)}
-                  placeholder="e.g. Work Alice"
-                  className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+                  type="tel"
+                  value={addPhone}
+                  onChange={(e) => { setAddPhone(e.target.value); setAddResult(null); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddContact()}
+                  placeholder="+1 234 567 8900"
+                  autoFocus
+                  className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors pr-10"
                 />
-              </div>
-
-              {/* Live search results */}
-              {searchResults.length > 0 && (
-                <div>
-                  <p className="text-[11px] font-semibold text-signal-secondary uppercase tracking-wide mb-2">
-                    Matching Users
-                  </p>
-                  <div className="border border-signal-border rounded-xl overflow-hidden divide-y divide-signal-border">
-                    {searchResults.map((user) => {
-                      const alreadyAdded = contacts.some((c) => c.contact_user.id === user.id);
-                      return (
-                        <div key={user.id} className="flex items-center gap-3 px-3 py-3 bg-white hover:bg-signal-bg transition-colors">
-                          <Avatar name={user.display_name} src={user.avatar_url} size={40} online={user.is_online} />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-[13px] text-gray-800 truncate">{user.display_name}</p>
-                            <p className="text-[11px] text-signal-secondary">{user.phone_number}</p>
-                          </div>
-                          {alreadyAdded ? (
-                            <span className="flex items-center gap-1 text-[11px] text-green-600 font-medium bg-green-50 px-2 py-1 rounded-full">
-                              <Check size={11} /> Added
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => handleAddContact(user.phone_number, addNickname || undefined)}
-                              disabled={addLoading}
-                              className="flex items-center gap-1 text-[12px] text-signal-teal font-semibold bg-signal-teal-light px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors disabled:opacity-50"
-                            >
-                              <UserPlus size={13} />
-                              Add
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Manual add button */}
-              <button
-                onClick={() => handleAddContact()}
-                disabled={addLoading || !addPhone.trim()}
-                className="w-full bg-signal-teal text-white py-3 rounded-xl font-medium text-sm hover:bg-signal-teal-dark transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
-              >
-                {addLoading ? (
-                  <><Loader2 size={16} className="animate-spin" /> Adding…</>
-                ) : (
-                  <><UserPlus size={16} /> Add Contact</>
+                {lookupLoading && (
+                  <Loader2 size={15} className="absolute right-3 top-3.5 animate-spin text-signal-secondary" />
                 )}
+              </div>
+              <p className="text-[11px] text-signal-secondary mt-1">
+                Full number with country code, e.g. +1234567890
+              </p>
+            </div>
+
+            {/* Nickname */}
+            <div>
+              <label className="text-xs font-semibold text-signal-secondary uppercase tracking-wide block mb-1.5">
+                Nickname <span className="font-normal text-signal-secondary">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={addNickname}
+                onChange={(e) => setAddNickname(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddContact()}
+                placeholder="How you know them"
+                className="w-full border border-signal-border rounded-xl px-4 py-3 text-sm focus:border-signal-teal transition-colors"
+              />
+            </div>
+
+            {/* Preview card — user found */}
+            {previewUser && !addResult && (
+              <div className="flex items-center gap-3 bg-signal-teal-light border border-signal-teal/20 rounded-xl px-4 py-3">
+                <Avatar name={previewUser.display_name} src={previewUser.avatar_url} size={44} online={previewUser.is_online} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[14px] text-gray-800">{previewUser.display_name}</p>
+                  <p className="text-[12px] text-signal-secondary">{previewUser.phone_number}</p>
+                  {previewUser.about && (
+                    <p className="text-[11px] text-signal-secondary truncate mt-0.5 italic">{previewUser.about}</p>
+                  )}
+                </div>
+                <CheckCircle2 size={18} className="text-signal-teal flex-shrink-0" />
+              </div>
+            )}
+
+            {/* No user found hint */}
+            {addPhone.length >= 7 && !lookupLoading && !previewUser && !addResult && (
+              <div className="flex items-start gap-2 text-[12px] text-signal-secondary bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
+                <AlertCircle size={14} className="flex-shrink-0 text-amber-500 mt-0.5" />
+                No Signal user found with this number — you can still save them as a contact.
+              </div>
+            )}
+
+            {/* Result banner */}
+            {addResult && (
+              <div className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-sm font-medium ${
+                addResult.type === "success"
+                  ? "bg-green-50 text-green-700 border border-green-200"
+                  : "bg-red-50 text-red-600 border border-red-200"
+              }`}>
+                {addResult.type === "success"
+                  ? <CheckCircle2 size={16} className="flex-shrink-0" />
+                  : <AlertCircle size={16} className="flex-shrink-0" />}
+                {addResult.message}
+              </div>
+            )}
+
+            {/* Buttons */}
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={() => { setView("list"); resetAdd(); }}
+                className="flex-1 border border-signal-border text-gray-600 py-3 rounded-xl text-sm font-medium hover:bg-signal-bg transition-colors"
+              >
+                Cancel
               </button>
+              <button
+                onClick={handleAddContact}
+                disabled={addLoading || !addPhone.trim()}
+                className="flex-1 bg-signal-teal text-white py-3 rounded-xl text-sm font-medium hover:bg-signal-teal-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {addLoading
+                  ? <><Loader2 size={15} className="animate-spin" /> Adding…</>
+                  : <><UserPlus size={15} /> Add Contact</>}
+              </button>
+            </div>
+
+            {/* Demo hint */}
+            <div className="bg-signal-bg rounded-xl px-4 py-3">
+              <p className="text-[11px] font-semibold text-signal-secondary uppercase tracking-wide mb-2">Tap a demo number</p>
+              <div className="space-y-0.5">
+                {[
+                  ["+1234567890", "Alice Johnson"],
+                  ["+1234567891", "Bob Smith"],
+                  ["+1234567892", "Carol White"],
+                  ["+1234567893", "David Brown"],
+                  ["+1234567894", "Eva Martinez"],
+                  ["+1234567895", "Frank Lee"],
+                  ["+1234567896", "Grace Kim"],
+                ].map(([num, name]) => (
+                  <button
+                    key={num}
+                    onClick={() => { setAddPhone(num); setAddResult(null); }}
+                    className={`w-full flex justify-between items-center px-2 py-1.5 rounded-lg hover:bg-white transition-colors text-left ${addPhone === num ? "bg-white ring-1 ring-signal-teal" : ""}`}
+                  >
+                    <span className="text-[12px] font-medium text-gray-700">{name}</span>
+                    <span className="text-[11px] text-signal-secondary font-mono">{num}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -345,70 +376,67 @@ export function ContactsModal({ onClose, onOpenConversation }: Props) {
   );
 }
 
-// ── Single contact row ────────────────────────────────────────────────────────
-
-function ContactRow({
-  contact,
-  onMessage,
-  onRemove,
-}: {
+function ContactRow({ contact, onMessage, onRemove }: {
   contact: Contact;
   onMessage: () => void;
   onRemove: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const user = contact.contact_user;
-  const displayName = contact.nickname || user.display_name;
+  const [showActions, setShowActions] = useState(false);
+  const displayName = contact.nickname || contact.contact_user.display_name;
 
   return (
-    <div className="rounded-xl overflow-hidden mb-0.5">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-3 px-3 py-3 hover:bg-signal-bg transition-colors text-left"
-      >
-        <Avatar name={displayName} src={user.avatar_url} size={44} online={user.is_online} />
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-[14px] text-gray-800 truncate">{displayName}</p>
+    <div
+      className="flex items-center gap-3 px-4 py-3 hover:bg-signal-bg transition-colors"
+      onMouseEnter={() => setShowActions(true)}
+      onMouseLeave={() => setShowActions(false)}
+    >
+      <Avatar
+        name={displayName}
+        src={contact.contact_user.avatar_url}
+        size={44}
+        online={contact.contact_user.is_online}
+      />
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-[14px] text-gray-800 truncate">{displayName}</p>
+        <div className="flex items-center gap-1.5 min-w-0">
           {contact.nickname && (
-            <p className="text-[11px] text-signal-secondary truncate">{user.display_name}</p>
+            <>
+              <span className="text-[11px] text-signal-teal font-medium truncate">
+                {contact.contact_user.display_name}
+              </span>
+              <span className="text-signal-border text-[11px]">·</span>
+            </>
           )}
-          <p className="text-[11px] text-signal-secondary truncate">{user.phone_number}</p>
+          <span className="text-[12px] text-signal-secondary truncate">
+            {contact.contact_user.phone_number}
+          </span>
         </div>
-        <div className="flex items-center gap-1">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${user.is_online ? "bg-green-400" : "bg-gray-300"}`} />
-          <ChevronRight
-            size={16}
-            className={`text-signal-icon transition-transform ${expanded ? "rotate-90" : ""}`}
-          />
-        </div>
-      </button>
+      </div>
 
-      {/* Expanded actions */}
-      {expanded && (
-        <div className="flex items-center gap-2 px-4 pb-3 pt-1 bg-signal-bg rounded-b-xl">
-          <button
-            onClick={onMessage}
-            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl bg-signal-teal text-white text-[13px] font-medium hover:bg-signal-teal-dark transition-colors"
-          >
-            <MessageCircle size={15} />
-            Message
-          </button>
-          <a
-            href={`tel:${user.phone_number}`}
-            className="flex items-center justify-center gap-2 py-2 px-4 rounded-xl border border-signal-border bg-white text-[13px] font-medium text-gray-700 hover:bg-signal-bg transition-colors"
-          >
-            <Phone size={15} />
-            Call
-          </a>
-          <button
-            onClick={onRemove}
-            className="p-2 rounded-xl border border-red-100 text-red-400 hover:bg-red-50 transition-colors"
-            title="Remove contact"
-          >
-            <Trash2 size={15} />
-          </button>
-        </div>
-      )}
+      {/* Hover actions */}
+      <div className={`flex items-center gap-1 transition-opacity flex-shrink-0 ${showActions ? "opacity-100" : "opacity-0"}`}>
+        <button
+          onClick={onMessage}
+          title="Send message"
+          className="p-2 rounded-lg text-signal-icon hover:text-signal-teal hover:bg-signal-teal-light transition-colors"
+        >
+          <MessageCircle size={16} />
+        </button>
+        <button
+          onClick={() => toast("Calls coming soon!", { icon: "📞" })}
+          title="Voice call"
+          className="p-2 rounded-lg text-signal-icon hover:text-signal-teal hover:bg-signal-teal-light transition-colors"
+        >
+          <Phone size={16} />
+        </button>
+        <button
+          onClick={onRemove}
+          title="Remove contact"
+          className="p-2 rounded-lg text-signal-icon hover:text-red-500 hover:bg-red-50 transition-colors"
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
     </div>
   );
 }
