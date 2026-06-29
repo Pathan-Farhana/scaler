@@ -6,9 +6,9 @@ A functional clone of Signal Messenger built with Next.js (TypeScript) frontend 
 
 ## 🚀 Live Demo
 
-- **Frontend:** https://your-app.vercel.app  
-- **Backend API:** https://your-api.onrender.com  
-- **API Docs:** https://your-api.onrender.com/docs
+- **Frontend:** https://signal-clone-jet.vercel.app/  
+- **Backend API:** https://signal-clone-api.onrender.com 
+- **API Docs:** https://signal-clone-api.onrender.com/docs
 
 ---
 
@@ -22,7 +22,7 @@ A functional clone of Signal Messenger built with Next.js (TypeScript) frontend 
 | David Brown | +1234567893 | password123 |
 | Eva Martinez | +1234567894 | password123 |
 
-> OTP for registration is always **123456**
+> the OTP is generated randomly on the server and displayed in the console for testing, rather than being fixed to a constant value.
 
 ---
 
