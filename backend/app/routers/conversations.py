@@ -29,7 +29,7 @@ async def build_conversation_out(conv: Conversation, current_user_id: str, db: A
             Message.conversation_id == conv.id,
             Message.is_deleted == False
         ).order_by(Message.created_at.desc()).limit(1)
-        .options(selectinload(Message.sender), selectinload(Message.reactions).selectinload(Message.reactions.and_(True)))
+        .options(selectinload(Message.sender), selectinload(Message.reactions))
     )
     last_msg = last_msg_result.scalar_one_or_none()
 
